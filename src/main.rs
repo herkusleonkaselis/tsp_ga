@@ -2,7 +2,7 @@ use std::{f32, fmt::Debug, hash::Hash};
 
 use kiss3d::{
     light::Light,
-    nalgebra::{Point2, Point3, Translation3, center},
+    nalgebra::{Point3, Translation3},
     window::Window,
 };
 use num_traits::{FromPrimitive, PrimInt, ToPrimitive, Unsigned};
@@ -12,13 +12,11 @@ use rand::{
     rngs::SmallRng,
     seq::SliceRandom,
 };
-use tracing::instrument;
-use tracing_flame::FlameLayer;
-use tracing_subscriber::{fmt, prelude::*, registry::Registry};
 
 include!(concat!(env!("OUT_DIR"), "/generated_city_data.rs"));
 
 trait CityIdx: PrimInt + Unsigned + Debug + Copy + Ord + Default + FromPrimitive + ToPrimitive {
+    #[inline(always)]
     fn as_index(&self) -> usize {
         self.to_usize().unwrap()
     }
@@ -35,7 +33,7 @@ struct City {
 }
 
 impl City {
-    #[inline]
+    #[inline(always)]
     fn distance_to(&self, other: &City) -> f32 {
         ((other.x - self.x).powi(2) + (other.y - self.y).powi(2)).sqrt()
     }
@@ -49,7 +47,6 @@ struct Genome<Idx: CityIdx, const N: usize> {
 }
 
 impl<Idx: CityIdx, const N: usize> Genome<Idx, N> {
-    #[instrument(skip(self, cities), name = "genome_fitness_calculation")]
     #[inline]
     fn fitness(&mut self, cities: &[City; N]) -> f32 {
         let mut total_distance = 0.0;
@@ -67,7 +64,6 @@ impl<Idx: CityIdx, const N: usize> Genome<Idx, N> {
         total_distance
     }
     #[inline]
-    #[instrument(skip(rng), name = "genome_mutation")]
     fn mutate_genome<R>(&mut self, rng: &mut R, cascade_rate: f64)
     where
         R: Rng,
@@ -88,7 +84,6 @@ impl<Idx: CityIdx, const N: usize> Genome<Idx, N> {
     }
 }
 
-#[instrument(skip(rng))]
 #[inline]
 fn random_genome<Idx: CityIdx + SampleUniform, const N: usize, R>(rng: &mut R) -> Genome<Idx, N>
 where
@@ -107,7 +102,6 @@ where
     }
 }
 
-#[instrument(skip(rng, p1, p2))]
 fn breed_ox1<Idx: CityIdx + Hash, const N: usize, R>(
     p1: &Genome<Idx, N>,
     p2: &Genome<Idx, N>,
@@ -220,24 +214,24 @@ fn greedy_genome<Idx: CityIdx, const N: usize, R: Rng>(
     }
 }
 
-const POPULATION_SIZE: usize = 10000;
-const NUM_GENERATIONS: usize = 20000;
-const MUTATION_RATE: f64 = 0.15;
-const CASCADING_MUTATION_RATE: f64 = 0.3;
-const CROSSOVER_RATE: f64 = 0.8;
-const N_ELITES: usize = POPULATION_SIZE / 100;
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+const POPULATION_SIZE: usize = 1000;
+const NUM_GENERATIONS: usize = 300000;
+const MUTATION_RATE: f64 = 0.2;
+const CASCADING_MUTATION_RATE: f64 = 0.4;
+const CROSSOVER_RATE: f64 = 0.8;
+const N_ELITES: usize = POPULATION_SIZE / 25;
+
+const RENDER: bool = false;
 const VISUALIZATION_SCALE_DIV: f32 = 2048.0;
 const SPHERE_RADIUS: f32 = 5.0 / VISUALIZATION_SCALE_DIV;
 
-const NUM_GREEDY_TO_INJECT: usize = 0 * POPULATION_SIZE / 50;
+const NUM_GREEDY_TO_INJECT: usize = POPULATION_SIZE / 100;
+const EXACT_GREEDY_INJECT_GEN: usize = 20000;
 
 fn main() {
-    let fmt_layer = fmt::Layer::default();
-    let (flame_layer, _guard) = FlameLayer::with_file("./tracing.folded").unwrap();
-    let subscriber = Registry::default().with(fmt_layer).with(flame_layer);
-    tracing::subscriber::set_global_default(subscriber).expect("Could not set global default");
-
     let mut rng = SmallRng::seed_from_u64(0xC0FFEEBABE);
     println!(
         "Program compiled for {} cities from {}.",
@@ -259,55 +253,53 @@ fn main() {
     );
     let mut min: f32 = f32::MAX;
     let mut max: f32 = f32::MIN;
-    {
-        let _seeding_span = tracing::info_span!("greedy_mutant_seeding").entered();
 
-        let actual_loops = usize::min(NUM_GREEDY_TO_INJECT, NUM_CITIES);
-        let actual_loops = usize::min(actual_loops, POPULATION_SIZE / 2);
+    let num_to_inject = usize::min(NUM_CITIES, NUM_GREEDY_TO_INJECT);
+    (0..num_to_inject).for_each(|i| {
+        let mut mutant_gene = greedy_genome(&CITIES_DATA, &mut rng);
+        mutant_gene.fitness(&CITIES_DATA);
+        println!("pre-retard fitness: {}", &mutant_gene.fitness.unwrap());
+        mutant_gene.mutate_genome(&mut rng, 0.3);
+        mutant_gene.mutate_genome(&mut rng, 0.3);
+        mutant_gene.mutate_genome(&mut rng, 0.3);
+        mutant_gene.mutate_genome(&mut rng, 0.3);
+        mutant_gene.mutate_genome(&mut rng, 0.3);
+        mutant_gene.fitness(&CITIES_DATA);
+        let fitness = mutant_gene.fitness(&CITIES_DATA);
+        min = f32::min(min, fitness);
+        max = f32::max(max, fitness);
+        println!("retard fitness: {}", fitness);
 
-        let num_to_inject = usize::min(NUM_CITIES, NUM_GREEDY_TO_INJECT);
-        (0..num_to_inject).for_each(|i| {
-            let mut fucked_up_gene = greedy_genome(&CITIES_DATA, &mut rng);
-            fucked_up_gene.fitness(&CITIES_DATA);
-            println!("pre-retard fitness: {}", &fucked_up_gene.fitness.unwrap());
-            fucked_up_gene.mutate_genome(&mut rng, 0.6);
-            fucked_up_gene.mutate_genome(&mut rng, 0.6);
-            fucked_up_gene.mutate_genome(&mut rng, 0.6);
-            fucked_up_gene.mutate_genome(&mut rng, 0.6);
-            fucked_up_gene.fitness(&CITIES_DATA);
-            let fitness = fucked_up_gene.fitness(&CITIES_DATA);
-            min = f32::min(min, fitness);
-            max = f32::max(max, fitness);
-            println!("retard fitness: {}", fitness);
-
-            population[i] = fucked_up_gene;
-        });
-    }
+        population[i] = mutant_gene;
+    });
     println!("Greedy gene (min,max) fitness: ({},{})", min, max);
 
     let mut best_genome_overall: Option<Genome<CityIndex, NUM_CITIES>> = None;
-
     for generation in 0..NUM_GENERATIONS {
-        let _generation_total_span =
-            tracing::info_span!("generation_loop", generation = generation).entered();
-
-        {
-            let _eval_span = tracing::info_span!("evaluate_fitness_population").entered();
-            for genome in population.iter_mut() {
-                if genome.fitness.is_none() {
-                    genome.fitness(&CITIES_DATA);
-                }
+        for genome in population.iter_mut() {
+            if genome.fitness.is_none() {
+                genome.fitness(&CITIES_DATA);
             }
         }
 
-        {
-            let _sort_span = tracing::info_span!("sort_population").entered();
-            population.sort_by(|a, b| {
-                a.fitness
+        population.sort_unstable_by(|a, b| {
+            a.fitness
+                .unwrap()
+                .partial_cmp(&b.fitness.unwrap())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        if generation == EXACT_GREEDY_INJECT_GEN {
+            let mut gg = greedy_genome(&CITIES_DATA, &mut rng);
+            println!(
+                "inserted greedy chad with {} fitness into a group led by a {} fitness ape",
+                gg.fitness(&CITIES_DATA),
+                population[0]
+                    .fitness
+                    .or_else(|| Some(population[0].fitness(&CITIES_DATA)))
                     .unwrap()
-                    .partial_cmp(&b.fitness.unwrap())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            );
+            population[POPULATION_SIZE - 1] = gg;
         }
 
         if best_genome_overall.is_none()
@@ -323,55 +315,43 @@ fn main() {
         }
 
         let mut new_population = Vec::with_capacity(POPULATION_SIZE);
-        {
-            let _repopulate_span = tracing::info_span!("build_new_population").entered();
-
-            {
-                let _elitism_span = tracing::info_span!("elitism_stage").entered();
-                for i in 0..N_ELITES {
-                    if i < population.len() {
-                        new_population.push(population[i].clone());
-                    }
-                }
-            }
-
-            {
-                let _reproduction_loop_span =
-                    tracing::info_span!("reproduction_loop_fill").entered();
-
-                while new_population.len() < POPULATION_SIZE {
-                    let parent1 = &population[rng.random_range(0..POPULATION_SIZE / 2)]; // Select from best half
-                    let parent2 = &population[rng.random_range(0..POPULATION_SIZE / 2)];
-
-                    if rng.random_bool(CROSSOVER_RATE) && NUM_CITIES >= 3 {
-                        let (mut child1, mut child2) = breed_ox1(parent1, parent2, &mut rng);
-
-                        if rng.random_bool(MUTATION_RATE) {
-                            child1.mutate_genome(&mut rng, CASCADING_MUTATION_RATE);
-                            child1.mutate_genome(&mut rng, CASCADING_MUTATION_RATE);
-                        }
-                        if rng.random_bool(MUTATION_RATE) {
-                            child2.mutate_genome(&mut rng, CASCADING_MUTATION_RATE);
-                            child2.mutate_genome(&mut rng, CASCADING_MUTATION_RATE);
-                        }
-                        new_population.push(child1);
-                        if new_population.len() < POPULATION_SIZE {
-                            new_population.push(child2);
-                        }
-                    } else {
-                        new_population.push(parent1.clone());
-                        if new_population.len() < POPULATION_SIZE {
-                            new_population.push(parent2.clone());
-                        }
-                    }
-                }
-                population = new_population;
+        for i in 0..N_ELITES {
+            if i < population.len() {
+                new_population.push(population[i].clone());
             }
         }
+
+        while new_population.len() < POPULATION_SIZE {
+            let parent1 = &population[rng.random_range(0..POPULATION_SIZE / 2)]; // Select from best half
+            let parent2 = &population[rng.random_range(0..POPULATION_SIZE / 2)];
+
+            if rng.random_bool(CROSSOVER_RATE) && NUM_CITIES >= 3 {
+                let (mut child1, mut child2) = breed_ox1(parent1, parent2, &mut rng);
+
+                if rng.random_bool(MUTATION_RATE) {
+                    child1.mutate_genome(&mut rng, CASCADING_MUTATION_RATE);
+                    child1.mutate_genome(&mut rng, CASCADING_MUTATION_RATE);
+                }
+                if rng.random_bool(MUTATION_RATE) {
+                    child2.mutate_genome(&mut rng, CASCADING_MUTATION_RATE);
+                    child2.mutate_genome(&mut rng, CASCADING_MUTATION_RATE);
+                }
+                new_population.push(child1);
+                if new_population.len() < POPULATION_SIZE {
+                    new_population.push(child2);
+                }
+            } else {
+                new_population.push(parent1.clone());
+                if new_population.len() < POPULATION_SIZE {
+                    new_population.push(parent2.clone());
+                }
+            }
+        }
+        population = new_population;
     }
 
     if let Some(ref best) = best_genome_overall {
-        println!("Finished!");
+        println!("Finished in {NUM_GENERATIONS} generations!");
         println!("Best fitness found: {}", best.fitness.unwrap());
         println!(
             "Best path: {:?}",
@@ -384,46 +364,48 @@ fn main() {
         println!("No solution found.");
     }
 
-    println!("Initializing visualization...");
-    let mut window = Window::new("TSP GA Visualization");
-    window.set_light(Light::StickToCamera);
+    if RENDER {
+        println!("Initializing visualization...");
+        let mut window = Window::new("TSP GA Visualization");
+        window.set_light(Light::StickToCamera);
 
-    let mut sum_x = 0.0;
-    let mut sum_y = 0.0;
-    for city in CITIES_DATA.iter() {
-        sum_x += city.x;
-        sum_y += city.y;
-    }
-    let num_cities_f32 = CITIES_DATA.len() as f32;
-    let center_x = sum_x / num_cities_f32;
-    let center_y = sum_y / num_cities_f32;
+        let mut sum_x = 0.0;
+        let mut sum_y = 0.0;
+        for city in CITIES_DATA.iter() {
+            sum_x += city.x;
+            sum_y += city.y;
+        }
+        let num_cities_f32 = CITIES_DATA.len() as f32;
+        let center_x = sum_x / num_cities_f32;
+        let center_y = sum_y / num_cities_f32;
 
-    let city_points_3d: Vec<Point3<f32>> = CITIES_DATA
-        .iter()
-        .map(|city| {
-            let x = (city.x - center_x) / VISUALIZATION_SCALE_DIV;
-            let y = (city.y - center_y) / VISUALIZATION_SCALE_DIV;
-            window
-                .add_sphere(SPHERE_RADIUS)
-                .set_local_translation(Translation3::new(x, y, 0.0));
-            Point3::new(x, y, 0.0)
-        })
-        .collect();
+        let city_points_3d: Vec<Point3<f32>> = CITIES_DATA
+            .iter()
+            .map(|city| {
+                let x = (city.x - center_x) / VISUALIZATION_SCALE_DIV;
+                let y = (city.y - center_y) / VISUALIZATION_SCALE_DIV;
+                window
+                    .add_sphere(SPHERE_RADIUS)
+                    .set_local_translation(Translation3::new(x, y, 0.0));
+                Point3::new(x, y, 0.0)
+            })
+            .collect();
 
-    // port from 2024R
-    let line_color_path = Point3::new(0.0, 1.0, 0.0);
-    while window.render() {
-        if let Some(best) = &best_genome_overall {
-            let path_indices = &best.path;
-            for i in 0..(NUM_CITIES) {
-                let city1_idx_in_path = path_indices[i].as_index();
-                let city2_idx_in_path = path_indices[(i + 1) % NUM_CITIES].as_index();
+        // port from 2024R
+        let line_color_path = Point3::new(0.0, 1.0, 0.0);
+        while window.render() {
+            if let Some(best) = &best_genome_overall {
+                let path_indices = &best.path;
+                for i in 0..(NUM_CITIES) {
+                    let city1_idx_in_path = path_indices[i].as_index();
+                    let city2_idx_in_path = path_indices[(i + 1) % NUM_CITIES].as_index();
 
-                let p1 = city_points_3d[city1_idx_in_path];
-                let p2 = city_points_3d[city2_idx_in_path];
-                window.draw_line(&p1, &p2, &line_color_path);
+                    let p1 = city_points_3d[city1_idx_in_path];
+                    let p2 = city_points_3d[city2_idx_in_path];
+                    window.draw_line(&p1, &p2, &line_color_path);
+                }
             }
         }
+        println!("Visualization window closed.");
     }
-    println!("Visualization window closed.");
 }

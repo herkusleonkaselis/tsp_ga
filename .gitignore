@@ -3,3 +3,5 @@
 *.svg
 *.data
 *.old
+callgrind*
+vgcore*

@@ -105,7 +105,7 @@ fn main() -> io::Result<()> {
     let dest_path = Path::new(&out_dir).join("generated_city_data.rs");
     let mut f = File::create(dest_path)?;
 
-    writeln!(f, "pub const NUM_CITIES: usize = {};", num_cities)?;
+    writeln!(f, "const NUM_CITIES: usize = {};", num_cities)?;
     writeln!(
         f,
         "pub type CityIndex = {};",
