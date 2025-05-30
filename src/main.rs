@@ -260,10 +260,10 @@ fn main() {
         mutant_gene.fitness(&CITIES_DATA);
         println!("pre-retard fitness: {}", &mutant_gene.fitness.unwrap());
         mutant_gene.mutate_genome(&mut rng, 0.3);
-        mutant_gene.mutate_genome(&mut rng, 0.3);
-        mutant_gene.mutate_genome(&mut rng, 0.3);
-        mutant_gene.mutate_genome(&mut rng, 0.3);
-        mutant_gene.mutate_genome(&mut rng, 0.3);
+        // mutant_gene.mutate_genome(&mut rng, 0.3);
+        // mutant_gene.mutate_genome(&mut rng, 0.3);
+        // mutant_gene.mutate_genome(&mut rng, 0.3);
+        // mutant_gene.mutate_genome(&mut rng, 0.3);
         mutant_gene.fitness(&CITIES_DATA);
         let fitness = mutant_gene.fitness(&CITIES_DATA);
         min = f32::min(min, fitness);
